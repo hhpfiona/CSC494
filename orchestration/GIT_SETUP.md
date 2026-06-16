@@ -55,7 +55,7 @@ the new repo.
 ```bash
 ssh hhpfiona@narval.alliancecan.ca
 cd ~/projects/def-enaskt/hhpfiona
-git clone git@github.com:<you>/CSC494.git
+git clone https://github.com/hhpfiona/CSC494.git
 # -> ~/projects/def-enaskt/hhpfiona/CSC494
 ```
 
