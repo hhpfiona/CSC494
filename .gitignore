@@ -1,0 +1,11 @@
+runs/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+.venv/
+venv/
+# model weights / datasets never go in git:
+*.bin
+*.safetensors
+*.gguf
