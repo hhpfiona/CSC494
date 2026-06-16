@@ -83,7 +83,7 @@ each name resolves to exactly one intended file.
   sbatch orchestration/run_ablation.slurm
   ```
 
-  Edit `run_ablation.slurm` first: set `--account` to your Alliance allocation,
+  Edit `run_ablation.slurm` first: set `--account` to Alliance allocation,
   confirm the GPU type, and adjust `MODEL`/`MAX_LOOPS` (overridable as env vars).
   The script loads `rust` before vllm/tokenizers and prefers Alliance wheels,
   per the Narval environment issues noted in the Agent A handoff. If you hit the
@@ -95,12 +95,6 @@ each name resolves to exactly one intended file.
   python -m orchestration.run_local --model meta-llama/Llama-3.1-8B-Instruct --max_loops 3
   ```
 
-## Superseded files
-
-The top-level `agent_b_critique.py` and `orchestrator.py` in the Agent A folder
-are PRE-refactor and not used by this layer (old `execution_mode` switch, the
-missing `get_static_schema`, `.query()` arbiter call, no traces). Keep them as
-history if you like, but run via `python -m orchestration.*`.
 
 ## Metrics
 

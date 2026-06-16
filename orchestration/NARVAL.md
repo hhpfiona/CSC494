@@ -1,7 +1,7 @@
 # Running on Narval (def-enaskt)
 
-Your project lives at `~/projects/def-enaskt/hhpfiona/CSC494`, copied from local.
-Your allocation is **Opportunistic Use** (low priority, no guaranteed resources),
+Project lives at `~/projects/def-enaskt/hhpfiona/CSC494`, pulled from GitHub.
+Allocation is **Opportunistic Use** (low priority, no guaranteed resources),
 so keep jobs modest and expect variable queue times.
 
 > Compute nodes have **no internet**. Anything downloaded from the web (model
@@ -17,8 +17,8 @@ cd ~/projects/def-enaskt/hhpfiona/CSC494
 module load python/3.11
 pip install --user huggingface_hub
 export HF_HOME=$SCRATCH/hf_cache       # big files belong in scratch, not project
-huggingface-cli login                  # needed for gated models like Llama
-huggingface-cli download meta-llama/Llama-3.1-8B-Instruct \
+hf auth login                 # needed for gated models like Llama
+hf download meta-llama/Llama-3.1-8B-Instruct \
     --local-dir $SCRATCH/models/llama31-8b
 ```
 
