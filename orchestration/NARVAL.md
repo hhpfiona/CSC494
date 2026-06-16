@@ -26,6 +26,8 @@ Then you can point `--model` either at the HF id (resolved from `$HF_HOME`) or
 directly at `$SCRATCH/models/llama31-8b`. The local dir is the most reliable
 offline.
 
+If using a different model, say qwen25-7b, then point --model at $SCRATCH/models/qwen25-7b, same as before.
+
 ---
 
 ## Step 1 — Verify the drop (no GPU needed, run on login node)
