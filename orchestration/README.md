@@ -1,9 +1,5 @@
 # PluralTree — In-Place Orchestration Layer
 
-Drop the `orchestration/` folder into your existing `CSC494/` directory, alongside
-`CulFiT/` and `Cultural_Commonsense_Knowledge_Graph/`. **Neither repo is modified
-or copied.** The layer imports both in place and resolves the `utils/` collision.
-
 ## How to read this project
 
 **To run it** (start here):
@@ -21,18 +17,18 @@ or copied.** The layer imports both in place and resolves the `utils/` collision
 **Reference, not sequential reading:**
 - `AGENT_CONTRACT.md` — the interface and data contract a new Agent A or Agent B must honor. Read this only when swapping in a different agent.
 
-**Quick start:** drop `orchestration/` into `CSC494/` next to `CulFiT/` and `Cultural_Commonsense_Knowledge_Graph/`, then from inside `CSC494/` run `python -m orchestration.check_setup` to verify the layout, and `python -m orchestration.run_ablation --mode mock` to see the pipeline work offline.
+**Quick start:** From inside `CSC494/` run `python -m orchestration.check_setup` to verify the layout, and `python -m orchestration.run_ablation --mode mock` to see the pipeline work offline.
 
-## Where it goes
+## Structure of things
 
 ```
 CSC494/
-├── CulFiT/                              # Agent B (unchanged)
+├── CulFiT/                              # Agent B 
 │   └── utils/{prompt_utils,llm_utils,json_fields}.py
-├── Cultural_Commonsense_Knowledge_Graph/  # Agent A (unchanged)
+├── Cultural_Commonsense_Knowledge_Graph/  # Agent A 
 │   ├── src/{config,main}.py
 │   └── src/utils/{llm_query,prompt_templates,response_parser}.py
-└── orchestration/        <-- ADD THIS FOLDER
+└── orchestration/        
     ├── __init__.py
     ├── bootstrap.py          # resolves the 3x "utils" collision via importlib
     ├── llm_backend.py        # make_backend("mock"|"api"|"local")
