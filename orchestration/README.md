@@ -49,7 +49,7 @@ python -m orchestration.run_ablation --mode local --model meta-llama/Llama-3.1-8
 
 Outputs to `CSC494/runs/`.
 
-## How the utils collision is solved (bootstrap.py)
+## How the utils collision is solved (bootstrap.py) --> now irrelevant as redundant utils is removed
 
 There are three directories named `utils`:
 `CulFiT/utils/`, `.../src/utils/`, and a CulFiT copy at `.../Cultural_..._Graph/utils/`.

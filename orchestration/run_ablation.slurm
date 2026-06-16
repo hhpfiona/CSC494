@@ -26,7 +26,7 @@ set -euo pipefail
 echo "Job $SLURM_JOB_ID on $(hostname) starting at $(date)"
 nvidia-smi || echo "WARNING: nvidia-smi unavailable"
 
-# --- 1. Modules (order matters: rust before vllm/tokenizers) ----------------
+# 1. Modules (order matters: rust before vllm/tokenizers) 
 module purge
 module load StdEnv/2023
 module load gcc/12.3            # provides a compiler for native wheels
@@ -35,7 +35,7 @@ module load python/3.11
 module load arrow/16            # pyarrow backing for pandas, Alliance-provided
 module load cuda/12.2
 
-# --- 2. Environment ---------------------------------------------------------
+# 2. Environment 
 # Use a project-local venv. If you hit the "invalid wheel" corruption again,
 # wipe and recreate (per the Agent A handoff): rm -rf "$VENV" then re-run.
 VENV="$SLURM_TMPDIR/pluraltree_env"     # node-local: fast + avoids stale metadata
@@ -51,7 +51,7 @@ pip install --no-index torch transformers tokenizers sentence-transformers \
         pandas openpyxl tenacity tqdm pydantic python-dotenv openai
 }
 
-# --- 3. Offline caches (compute nodes are air-gapped) -----------------------
+# 3. Offline caches (compute nodes are air-gapped) 
 # Pre-download the model on a LOGIN node first, e.g.:
 #   huggingface-cli download meta-llama/Llama-3.1-8B-Instruct --local-dir $SCRATCH/models/llama31-8b
 # then point HF at the cache and run fully offline:
@@ -62,7 +62,7 @@ export TRANSFORMERS_OFFLINE=1
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 MAX_LOOPS="${MAX_LOOPS:-3}"
 
-# --- 4. Run -----------------------------------------------------------------
+# 4. Run 
 mkdir -p runs
 echo "Running local-mode ablation with MODEL=$MODEL MAX_LOOPS=$MAX_LOOPS"
 python -m orchestration.run_local --model "$MODEL" --max_loops "$MAX_LOOPS"
