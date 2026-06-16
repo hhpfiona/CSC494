@@ -129,7 +129,6 @@ def run(mode: str, model: str, max_loops: int):
                               "agent_b": getattr(b_backend, "call_count", None)},
             }
             records.append(rec)
-            import os
             os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
             with open(jsonl_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec) + "\n")
