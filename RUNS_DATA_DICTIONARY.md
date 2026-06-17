@@ -1,10 +1,14 @@
 # Ablation Runs — Data Dictionary
 
-Reference for every variable produced by:
+Reference for every variable produced by the ablation harnesses:
 
 ```bash
-python -m orchestration.run_ablation --mode mock
+python -m orchestration.run_ablation --mode mock   # offline / API
+python -m orchestration.run_local   --model ...     # cluster GPU
 ```
+
+Both write the same record shape; differences are noted inline (the main one:
+`run_local.py` records omit the `llm_calls` block — see §1.1).
 
 Each invocation writes two files into `runs/`:
 
@@ -33,10 +37,13 @@ One JSON object per line. Top-level fields:
 | `location` | str | Cultural group / region for this item (e.g. `"Indonesia"`). |
 | `topology` | str | Experimental condition: `static`, `parallel`, or `sequential`. This is the variable being ablated. |
 | `n_final_paths` | int | Number of knowledge paths in Agent A's output after the run finished. |
-| `llm_calls` | object | Backend call counts per agent — the cost signal. See §1.1. |
+| `llm_calls` | object | Backend call counts per agent — the cost signal. **`run_ablation.py` (mock/api) only**; `run_local.py` cluster records omit this. See §1.1. |
 | `trace` | object | The substance of the run: verdicts, precision, loops, repairs. See §1.2. |
 
-### 1.1 `llm_calls`
+### 1.1 `llm_calls`  (mock/api harness only)
+
+Present in `run_ablation.py` output; absent from `run_local.py` (cluster). When
+present:
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -46,7 +53,8 @@ One JSON object per line. Top-level fields:
 > **Exact vs. averaged.** These are *exact per-run* counts. A sequential run can
 > show e.g. 9 Agent B calls (3 critique passes × 3 dimensions), while the summary
 > reports an *average* across queries. For cost analysis use the JSONL, not the
-> summary.
+> summary. On the cluster (no `llm_calls`), derive cost from the trace:
+> Agent B calls ≈ Σ over loops of (n_paths × 3 dimensions).
 
 ### 1.2 `trace`
 
@@ -107,31 +115,46 @@ response counts as a pass. `precision_score` = passes / 3.
 ## 2. Summary record (`ablation_<timestamp>_summary.json`)
 
 A single JSON object keyed by topology (`static`, `parallel`, `sequential`).
-Each value aggregates that topology's runs across all queries:
+Each value aggregates that topology's runs across all queries.
+
+> **Two harnesses emit slightly different summary keys.** `run_ablation.py`
+> (mock/api) and `run_local.py` (cluster GPU) share most fields but differ on
+> call-count reporting. The tables below mark which is which. Your cluster
+> results come from `run_local.py`.
+
+**Common to both harnesses:**
 
 | Field | Type | Meaning |
 |-------|------|---------|
 | `n_runs` | int | Number of `(query, topology)` runs aggregated (= number of queries). |
 | `approval_rate` | float | Fraction of runs where `final_approved` was `True`, `0.0`–`1.0`. |
-| `mean_precision` | float | Average of `final_mean_precision` across runs. |
+| `avg_mean_precision` | float | Average of `final_mean_precision` across runs. |
 | `avg_loops` | float | Average loop count. |
 | `avg_repairs` | float | Average repair count. |
-| `avg_calls_agent_a` / `avg_calls_agent_b` | float | Average backend calls per agent. |
 
-> Exact summary keys depend on what `run_ablation.py`'s aggregation block emits;
-> the table above reflects the logged raw signal. The `inspect_run.py` helper
-> prints whatever keys are actually present, so it stays correct even if the
-> aggregation changes.
+**`run_ablation.py` (mock/api) only:**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `avg_agent_b_calls` | float | Average Agent B backend calls per run. (Cost signal; `run_local.py` does not emit this.) |
+
+> The precision key is `avg_mean_precision` (not `mean_precision`). `run_local.py`
+> records carry no `llm_calls` block and its summary has no call-count field, so
+> for cluster cost analysis count calls from the trace (loops × paths × 3
+> dimensions) rather than expecting a logged total. `inspect_run.py` prints
+> whatever keys are present, so it stays correct across both harnesses.
 
 ---
 
 ## 3. The path dict (Agent A output — context for `per_path.path`)
 
-For reference, each path Agent A produces (and Agent B judges) looks like:
+For reference, each path Agent A produces (and Agent B judges) has all six keys:
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `relation_type` | str | ATOMIC-style relation (e.g. `xEffect`, `xNeed`). |
+| `event` | str | The action/situation (CCKG triple head). |
+| `knowledge` | str | The cultural knowledge invoked. |
+| `relation` | str | ATOMIC-style relation (e.g. `xEffect`, `xNeed`). Note: stored as `relation`, though Agent A's raw LLM output calls it `relation_type` before parsing. |
 | `llm_result` | str | Natural-language reasoning path — the field Agent B critiques. |
 | `location` | str | Cultural group / region. |
 | `sub_topic` | str | Topic. |
