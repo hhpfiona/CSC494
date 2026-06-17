@@ -81,8 +81,7 @@ git pull
 # ... run jobs (see NARVAL.md) ...
 
 # LAPTOP: pull results back, OUTSIDE git
-rsync -av hhpfiona@narval.alliancecan.ca:~/projects/def-enaskt/hhpfiona/CSC494/runs/ \
-    ~/CSC494/runs/
+scp -r "hhpfiona@narval.alliancecan.ca:~/projects/def-enaskt/hhpfiona/CSC494/runs/*" "$HOME\CSC494\runs\"
 ```
 
 Results live only where they're generated (Narval) and are copied down on
