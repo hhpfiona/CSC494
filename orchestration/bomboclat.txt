@@ -1,0 +1,105 @@
+SMOKE TEST 
+python -m orchestration.run_local --model $SLURM_TMPDIR/llama31-8b --smoke
+
+INFO: Loading tokenizer: /localscratch/hhpfiona.63145376.0/llama31-8b
+INFO: Loading model: /localscratch/hhpfiona.63145376.0/llama31-8b (dtype=bfloat16, device_map=auto)
+Loading weights: 100%|██████████████████████████████████████████████████████████████████████| 291/291 [00:41<00:00,  7.02it/s]
+INFO: Model loaded. Device map ready.
+INFO: [sequential] start (max_loops=1)
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+====== COMOMESENSE==== [{'action': 'An Indonesian person wakes up early', 'knowledge': 'Their stomach', 'relation_type': 'xNeed', 'result': 'If an Indonesian person wakes up early, then they need to eat something to satisfy their stomach.'}, {'action': 'An Indonesian person has a bowl of rice for breakfast', 'knowledge': 'Their meal is complete', 'relation_type': 'xEffect', 'result': 'If an Indonesian person has a bowl of rice for breakfast, then their meal is complete.'}, {'action': 'An Indonesian person cooks eggs for breakfast', 'knowledge': 'Their omelet is likely sunny-side up', 'relation_type': 'xEffect', 'result': 'If an Indonesian person cooks eggs for breakfast, then their omelet is likely to be sunny-side up.'}, {'action': 'An Indonesian person eats nasi goreng for breakfast', 'knowledge': 'Their breakfast is likely spicy', 'relation_type': 'xEffect', 'result': 'If an Indonesian person eats nasi goreng for breakfast, then their breakfast is likely to be spicy.'}, {'action': 'An Indonesian person eats breakfast at home', 'knowledge': 'Their family is nearby', 'relation_type': 'oNext', 'result': 'If an Indonesian person eats breakfast at home, then their family is likely to be nearby.'}, {'action': 'An Indonesian person eats breakfast with their family', 'knowledge': 'Their conversation is casual', 'relation_type': 'oEffect', 'result': 'If an Indonesian person eats breakfast with their family, then their conversation is likely to be casual.'}, {'action': 'An Indonesian person goes to a warung for breakfast', 'knowledge': 'They will likely order gado-gado', 'relation_type': 'xNext', 'result': 'If an Indonesian person goes to a warung for breakfast, then they will likely order gado-gado.'}, {'action': 'An Indonesian person buys kopi tubruk for breakfast', 'knowledge': 'Their beverage is strong', 'relation_type': 'xEffect', 'result': 'If an Indonesian person buys kopi tubruk for breakfast, then their beverage is likely to be strong.'}, {'action': 'An Indonesian person eats breakfast with friends at a café', 'knowledge': 'They will likely post about it on social media', 'relation_type': 'xNext', 'result': 'If an Indonesian person eats breakfast with friends at a café, then they will likely post about it on social media.'}, {'action': 'An Indonesian person eats mi goreng for breakfast', 'knowledge': 'Their meal is likely served with a fried egg', 'relation_type': 'xEffect', 'result': 'If an Indonesian person eats mi goreng for breakfast, then their meal is likely to be served with a fried egg.'}, {'action': 'An Indonesian person eats breakfast with colleagues at the office', 'knowledge': 'Their discussion is work-related', 'relation_type': 'oEffect', 'result': 'If an Indonesian person eats breakfast with colleagues at the office, then their discussion is likely to be work-related.'}]
+INFO: Agent A generated 3 path(s).
+INFO: [breakfast | sequential] approved=False mean_precision=0.89 loops=1 repairs=0
+INFO: Wrote runs/ablation_smoke__localscratch_hhpfiona.63145376.0_llama31-8b_20260617_013248.jsonl and runs/ablation_smoke__localscratch_hhpfiona.63145376.0_llama31-8b_20260617_013248_summary.json
+
+=== ABLATION SUMMARY (local) ===
+{
+  "static": {
+    "n_runs": 0,
+    "approval_rate": 0.0,
+    "avg_mean_precision": 0.0,
+    "avg_loops": 0.0,
+    "avg_repairs": 0.0
+  },
+  "parallel": {
+    "n_runs": 0,
+    "approval_rate": 0.0,
+    "avg_mean_precision": 0.0,
+    "avg_loops": 0.0,
+    "avg_repairs": 0.0
+  },
+  "sequential": {
+    "n_runs": 1,
+    "approval_rate": 0.0,
+    "avg_mean_precision": 0.8888888888888888,
+    "avg_loops": 1.0,
+    "avg_repairs": 0.0
+  }
+}
+
+---------------------------------------------------------------------------------------------------------
+READ JSONL FILE 
+cat runs/ablation_smoke_*.jsonl | python -m json.tool
+
+{
+    "model": "/localscratch/hhpfiona.63145376.0/llama31-8b",
+    "query": "breakfast",
+    "location": "Indonesia",
+    "topology": "sequential",
+    "n_final_paths": 3,
+    "trace": {
+        "loops": 1,
+        "repairs": 0,
+        "final_approved": false,
+        "final_mean_precision": 0.8888888888888888,
+        "iterations": [
+            {
+                "iteration": 1,
+                "approved": false,
+                "mean_precision": 0.8888888888888888,
+                "n_paths": 3
+            }
+        ],
+        "critique": {
+            "approved": false,
+            "mean_precision": 0.8888888888888888,
+            "n_paths": 3,
+            "per_path": [
+                {
+                    "path": "If an Indonesian person wakes up early, then they need to eat something to satisfy their stomach.",
+                    "approved": true,
+                    "precision_score": 1.0,
+                    "verdicts": {
+                        "Cultural Group Alignment": "Yes",
+                        "Topic Alignment": "Yes",
+                        "Knowledge Path Alignment": "Yes"
+                    },
+                    "feedback": "Culturally verified and validated."
+                },
+                {
+                    "path": "If an Indonesian person has a bowl of rice for breakfast, then their meal is complete.",
+                    "approved": true,
+                    "precision_score": 1.0,
+                    "verdicts": {
+                        "Cultural Group Alignment": "Yes",
+                        "Topic Alignment": "Yes",
+                        "Knowledge Path Alignment": "Yes"
+                    },
+                    "feedback": "Culturally verified and validated."
+                },
+                {
+                    "path": "If an Indonesian person cooks eggs for breakfast, then their omelet is likely to be sunny-side up.",
+                    "approved": false,
+                    "precision_score": 0.6666666666666666,
+                    "verdicts": {
+                        "Cultural Group Alignment": "Yes",
+                        "Topic Alignment": "Yes",
+                        "Knowledge Path Alignment": "No"
+                    },
+                    "feedback": "[Knowledge Path Alignment Failure]: No\n\nexplanation: the cultural knowledge point \"If an Indonesian person cooks eggs for breakfast, then their omelet is likely to be sunny-side up\" is not addressed clear in the reference cultural knowledge points, which only mention traditional rice porridge and rice-based dishes for breakfast in Indonesia, but do not provide information about omelets or their cooking styles."
+                }
+            ],
+            "feedback": "Offending Path: 'If an Indonesian person cooks eggs for breakfast, then their omelet is likely to be sunny-side up.' -> Reason: [Knowledge Path Alignment Failure]: No\n\nexplanation: the cultural knowledge point \"If an Indonesian person cooks eggs for breakfast, then their omelet is likely to be sunny-side up\" is not addressed clear in the reference cultural knowledge points, which only mention traditional rice porridge and rice-based dishes for breakfast in Indonesia, but do not provide information about omelets or their cooking styles."
+        }
+    }
+}
