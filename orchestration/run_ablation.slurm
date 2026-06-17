@@ -14,11 +14,6 @@
 # Submit from the CSC494/ directory:
 #     cd CSC494
 #     sbatch orchestration/run_ablation.slurm
-#
-# Notes baked in from the Agent A handoff (Narval env pain points):
-#   - load rust BEFORE any vllm/tokenizers build
-#   - prefer Alliance module wheels; avoid a corrupted venv (clean wipe if needed)
-#   - models/datasets must be pre-downloaded (compute nodes have NO internet)
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -64,6 +59,7 @@ export TRANSFORMERS_OFFLINE=1
 # stage it to node-local SSD ($SLURM_TMPDIR) and load from there.
 MODEL_SRC="${MODEL_SRC:-$SCRATCH/models/llama31-8b}"
 MAX_LOOPS="${MAX_LOOPS:-3}"
+MAX_PATHS="${MAX_PATHS:-12}"   # cap paths/query so the full ablation finishes in time
 
 # 3b. Stage model to node-local SSD (fast) 
 # If MODEL_SRC is a directory on scratch, copy it to $SLURM_TMPDIR once
@@ -81,7 +77,7 @@ fi
 
 # 4. Run
 mkdir -p runs
-echo "Running local-mode ablation with MODEL=$MODEL MAX_LOOPS=$MAX_LOOPS"
-python -m orchestration.run_local --model "$MODEL" --max_loops "$MAX_LOOPS"
+echo "Running local-mode ablation with MODEL=$MODEL MAX_LOOPS=$MAX_LOOPS MAX_PATHS=$MAX_PATHS"
+python -m orchestration.run_local --model "$MODEL" --max_loops "$MAX_LOOPS" --max_paths "$MAX_PATHS"
 
 echo "Job $SLURM_JOB_ID finished at $(date)"

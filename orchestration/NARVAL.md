@@ -98,7 +98,7 @@ Once the smoke test passes, submit the real job:
 
 ```bash
 cd ~/projects/def-enaskt/hhpfiona/CSC494
-# optional overrides: export MODEL_SRC=$SCRATCH/models/llama31-8b MAX_LOOPS=3
+# optional overrides: export MODEL_SRC=$SCRATCH/models/llama31-8b MAX_LOOPS=3 MAX_PATHS=12
 sbatch orchestration/run_ablation.slurm
 squeue -u $USER          # watch the queue
 ```
