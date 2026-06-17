@@ -1,6 +1,6 @@
 import tenacity
 import os
-from openai import OpenAI, api_key
+from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from pydantic import BaseModel
