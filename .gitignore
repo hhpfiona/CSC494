@@ -9,3 +9,4 @@ venv/
 *.bin
 *.safetensors
 *.gguf
+report.txt
