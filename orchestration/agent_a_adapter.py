@@ -20,13 +20,14 @@ logger = logging.getLogger(__name__)
 
 class AgentA:
     def __init__(self, backend: LLMBackend, location: str = "England",
-                 sub_topic: str = "breakfast", language: str = "English",
-                 prompt_key: str | None = None):
+                sub_topic: str = "breakfast", language: str = "English",
+                prompt_key: str | None = None, max_paths: int | None = None):
         self.backend = backend
         self.location = location
         self.sub_topic = sub_topic
         self.language = language
         self.prompt_key = prompt_key or "England_gen"
+        self.max_paths = max_paths  # None = no cap; useful to keep smoke runs fast
 
     def _build_generation_messages(self, query: str) -> list[dict]:
         template = generation_prompts[self.prompt_key]
@@ -52,6 +53,8 @@ class AgentA:
         for entry in parsed:
             entry.setdefault("location", self.location)
             entry.setdefault("sub_topic", self.sub_topic)
+        if self.max_paths is not None:
+            parsed = parsed[:self.max_paths]
         return parsed
 
     def generate(self, query: str) -> list[dict]:

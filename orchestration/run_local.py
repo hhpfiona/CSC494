@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from datetime import datetime
 
 from orchestration import bootstrap
@@ -83,12 +84,19 @@ def run(model_name: str, max_loops: int, dtype: str, smoke: bool = False,
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_model = model_name.replace("/", "_")
     tag = "smoke" if smoke else "local"
+
+    os.makedirs("runs", exist_ok=True)
     jsonl_path = f"runs/ablation_{tag}_{safe_model}_{ts}.jsonl"
     summary_path = f"runs/ablation_{tag}_{safe_model}_{ts}_summary.json"
     records = []
 
     for q in queries:
-        agent_a = AgentA(backend, location=q["location"], sub_topic=q["sub_topic"])
+        # In smoke mode, cap Agent A to a few paths so Agent B doesn't run
+        # 3 critique calls x dozens of paths on a debug run.
+        a_max_paths = 3 if smoke else None
+        agent_a = AgentA(backend, location=q["location"], sub_topic=q["sub_topic"],
+                         max_paths=a_max_paths)
+        
         agent_b = AgentBCritiqueEngine(backend)
         orch = CulturalAgentOrchestrator(agent_a, agent_b, arbiter_backend=backend)
 

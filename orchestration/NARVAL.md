@@ -53,9 +53,7 @@ batch job.
 
 ```bash
 # Request a small interactive allocation (adjust time/mem down for opportunistic)
-salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=00:30:00
-# salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=01:00:00 #
-# one hour instead of 30min
+salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=01:00:00 
 
 # once the shell drops you onto the GPU node (e.g., from hhpfiona@narval3 --> hhpfiona@ng10104)
 cd ~/projects/def-enaskt/hhpfiona/CSC494

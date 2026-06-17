@@ -104,9 +104,14 @@ class LocalBackend(LLMBackend):
         self._lama_generation = _import_from_culfit_llm_utils("lama_generation")
 
     def chat(self, messages: list[dict], temperature: float = 0.1) -> str:
+        # HF's model.generate with do_sample=True rejects temperature=0.0
+        # ("has to be a strictly positive float"). Agent B asks for 0.0 to mean
+        # "be deterministic"; the closest valid sampling value is a tiny epsilon,
+        # which is effectively greedy. Clamp here so callers can still pass 0.0.
+        temp = max(temperature, 1e-2)
         out = self._lama_generation(
             model=self.model_obj, tokenizer=self.tokenizer_obj,
-            input_messages=messages, temperature=temperature,
+            input_messages=messages, temperature=temp,
         )
         return out or ""
 
