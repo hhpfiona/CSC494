@@ -52,15 +52,40 @@ class MockBackend(LLMBackend):
         return self.responder(messages)
 
 
+def _import_from_culfit_llm_utils(name: str):
+    """
+    Import `name` from CulFiT's llm_utils (registered by bootstrap), turning the
+    cryptic failure modes into one clear message. The usual causes are:
+      - CulFiT/utils/llm_utils.py has a broken top-level import (e.g. the
+        removed `openai.api_key`, or `openai`/`tenacity`/`pydantic` not installed
+        in this venv), so the module loads partially and `name` is never defined.
+    """
+    from orchestration import bootstrap
+    bootstrap.install()
+    try:
+        import culfit_llm_utils  # bootstrap-registered
+    except Exception as e:
+        raise ImportError(
+            f"Could not import CulFiT's llm_utils. This is almost always a broken "
+            f"top-level import in CulFiT/utils/llm_utils.py or a missing package in "
+            f"this environment (openai / tenacity / pydantic). Original error: {e}"
+        ) from e
+    if not hasattr(culfit_llm_utils, name):
+        raise ImportError(
+            f"'{name}' is missing from CulFiT/utils/llm_utils.py. The module likely "
+            f"imported only partially because a top-level import failed before "
+            f"'{name}' was defined. Check the imports at the top of that file and "
+            f"that openai / tenacity / pydantic are installed (pip install --no-index ...)."
+        )
+    return getattr(culfit_llm_utils, name)
+
+
 class APIBackend(LLMBackend):
     """OpenAI-compatible endpoint. Lazily imports so mock mode never needs openai."""
 
     def __init__(self, model_name: str = "gpt-4o"):
         self.model_name = model_name
-        from orchestration import bootstrap
-        bootstrap.install()
-        from culfit_llm_utils import openai_response  # bootstrap-registered
-        self._openai_response = openai_response
+        self._openai_response = _import_from_culfit_llm_utils("openai_response")
 
     def chat(self, messages: list[dict], temperature: float = 0.0) -> str:
         out = self._openai_response(
@@ -76,10 +101,7 @@ class LocalBackend(LLMBackend):
         self.model_obj = model_obj
         self.tokenizer_obj = tokenizer_obj
         self.model_name = model_name
-        from orchestration import bootstrap
-        bootstrap.install()
-        from culfit_llm_utils import lama_generation  # bootstrap-registered
-        self._lama_generation = lama_generation
+        self._lama_generation = _import_from_culfit_llm_utils("lama_generation")
 
     def chat(self, messages: list[dict], temperature: float = 0.1) -> str:
         out = self._lama_generation(

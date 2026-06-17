@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1                     # generic GPU; opportunistic use, don't pin a type
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=48G
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --output=runs/slurm_%x_%j.out
 #SBATCH --error=runs/slurm_%x_%j.err
 
@@ -45,10 +45,10 @@ pip install --no-index --upgrade pip
 
 # Prefer Alliance prebuilt wheels (--no-index). Fall back to PyPI only if needed.
 pip install --no-index torch transformers tokenizers sentence-transformers \
-    pandas openpyxl tenacity tqdm pydantic python-dotenv openai || {
+    accelerate pandas openpyxl tenacity tqdm pydantic python-dotenv openai || {
     echo "Alliance wheels incomplete; retrying with PyPI for the gaps..."
     pip install torch transformers tokenizers sentence-transformers \
-        pandas openpyxl tenacity tqdm pydantic python-dotenv openai
+        accelerate pandas openpyxl tenacity tqdm pydantic python-dotenv openai
 }
 
 # 3. Offline caches (compute nodes are air-gapped) 
@@ -59,10 +59,27 @@ export HF_HOME="${HF_HOME:-$SCRATCH/hf_cache}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+# MODEL_SRC = where the weights live on /scratch (Lustre). Set this to the
+# pre-downloaded local dir. Loading 16GB directly off Lustre is SLOW, so we
+# stage it to node-local SSD ($SLURM_TMPDIR) and load from there.
+MODEL_SRC="${MODEL_SRC:-$SCRATCH/models/llama31-8b}"
 MAX_LOOPS="${MAX_LOOPS:-3}"
 
-# 4. Run 
+# 3b. Stage model to node-local SSD (fast) 
+# If MODEL_SRC is a directory on scratch, copy it to $SLURM_TMPDIR once
+# (sequential read = fast) and load from local disk. If MODEL_SRC is already a
+# bare HF id (no such dir), skip staging and let transformers use $HF_HOME.
+if [ -d "$MODEL_SRC" ]; then
+    STAGED="$SLURM_TMPDIR/$(basename "$MODEL_SRC")"
+    echo "Staging model: $MODEL_SRC -> $STAGED"
+    time cp -r "$MODEL_SRC" "$STAGED"
+    MODEL="$STAGED"
+else
+    echo "MODEL_SRC is not a local dir; using as-is (HF id / cache): $MODEL_SRC"
+    MODEL="$MODEL_SRC"
+fi
+
+# 4. Run
 mkdir -p runs
 echo "Running local-mode ablation with MODEL=$MODEL MAX_LOOPS=$MAX_LOOPS"
 python -m orchestration.run_local --model "$MODEL" --max_loops "$MAX_LOOPS"

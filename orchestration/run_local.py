@@ -49,9 +49,17 @@ def load_hf_model(model_name: str, dtype: str = "bfloat16"):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     logger.info("Loading model: %s (dtype=%s, device_map=auto)", model_name, dtype)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name, device_map="auto", torch_dtype=torch_dtype
-    )
+    # Newer transformers renamed `torch_dtype` -> `dtype`. 
+    # Try the new name first, 
+    # fall back to the old one so this works on both.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, device_map="auto", dtype=torch_dtype
+        )
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, device_map="auto", torch_dtype=torch_dtype
+        )
     model.eval()
     logger.info("Model loaded. Device map ready.")
     return model, tokenizer

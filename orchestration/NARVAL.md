@@ -20,6 +20,7 @@ export HF_HOME=$SCRATCH/hf_cache       # big files belong in scratch, not projec
 hf auth login                 # needed for gated models like Llama
 hf download meta-llama/Llama-3.1-8B-Instruct \
     --local-dir $SCRATCH/models/llama31-8b
+    # only need to download once
 ```
 
 Then you can point `--model` either at the HF id (resolved from `$HF_HOME`) or
@@ -53,8 +54,10 @@ batch job.
 ```bash
 # Request a small interactive allocation (adjust time/mem down for opportunistic)
 salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=00:30:00
+# salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=01:00:00 #
+# one hour instead of 30min
 
-# --- once the shell drops you onto the GPU node ---
+# once the shell drops you onto the GPU node (e.g., from hhpfiona@narval3 --> hhpfiona@ng10104)
 cd ~/projects/def-enaskt/hhpfiona/CSC494
 
 module purge
@@ -64,14 +67,18 @@ module load StdEnv/2023 gcc/12.3 rust/1.76.0 python/3.11 arrow/16 cuda/12.2
 python -m venv $SLURM_TMPDIR/env && source $SLURM_TMPDIR/env/bin/activate
 pip install --no-index --upgrade pip
 pip install --no-index torch transformers tokenizers sentence-transformers \
-    pandas openpyxl tenacity tqdm pydantic python-dotenv
+    accelerate openai pandas openpyxl tenacity tqdm pydantic python-dotenv
 
 export HF_HOME=$SCRATCH/hf_cache
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 
-# the smoke test: 1 query, sequential only, max_loops=1
+# STAGE the model to node-local SSD first — loading 16GB straight off /scratch
+# (Lustre) is very slow. Copy once (sequential = fast), then load from local disk.
+time cp -r $SCRATCH/models/llama31-8b $SLURM_TMPDIR/llama31-8b
+
+# the smoke test: 1 query, sequential only, max_loops=1 — loads from LOCAL disk
 python -m orchestration.run_local \
-    --model $SCRATCH/models/llama31-8b \
+    --model $SLURM_TMPDIR/llama31-8b \
     --smoke
 
 # when done
@@ -93,7 +100,7 @@ Once the smoke test passes, submit the real job:
 
 ```bash
 cd ~/projects/def-enaskt/hhpfiona/CSC494
-# optional overrides: export MODEL=$SCRATCH/models/llama31-8b MAX_LOOPS=3
+# optional overrides: export MODEL_SRC=$SCRATCH/models/llama31-8b MAX_LOOPS=3
 sbatch orchestration/run_ablation.slurm
 squeue -u $USER          # watch the queue
 ```
@@ -101,10 +108,11 @@ squeue -u $USER          # watch the queue
 Logs stream to `runs/slurm_pluraltree_ablation_<jobid>.out`. Results land in
 `runs/ablation_local_*.jsonl` and `*_summary.json`.
 
-> If you pre-downloaded to `$SCRATCH/models/llama31-8b`, set
-> `export MODEL=$SCRATCH/models/llama31-8b` before `sbatch`, or edit the `MODEL`
-> default in the `.slurm` file. The HF-id default only works if the id is cached
-> in `$HF_HOME`.
+> The batch script stages the model from `MODEL_SRC` (a /scratch dir) to
+> node-local SSD automatically before loading, so you don't hit the slow-Lustre
+> problem. `MODEL_SRC` defaults to `$SCRATCH/models/llama31-8b` — override it if
+> your weights live elsewhere. If you set `MODEL_SRC` to a bare HF id instead of
+> a directory, staging is skipped and transformers loads from `$HF_HOME`.
 
 ---
 
