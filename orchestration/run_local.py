@@ -67,7 +67,7 @@ def load_hf_model(model_name: str, dtype: str = "bfloat16"):
 
 
 def run(model_name: str, max_loops: int, dtype: str, smoke: bool = False,
-        only_topology: str | None = None):
+        only_topology: str | None = None, max_paths: int | None = None):
     model, tokenizer = load_hf_model(model_name, dtype)
 
     # ONE backend instance, shared by both agents and the arbiter.
@@ -91,9 +91,9 @@ def run(model_name: str, max_loops: int, dtype: str, smoke: bool = False,
     records = []
 
     for q in queries:
-        # In smoke mode, cap Agent A to a few paths so Agent B doesn't run
-        # 3 critique calls x dozens of paths on a debug run.
-        a_max_paths = 3 if smoke else None
+        # Path cap keeps Agent B from running 3 critique calls x dozens of paths.
+        # Smoke defaults to 3; otherwise use --max_paths (None = no cap).
+        a_max_paths = max_paths if max_paths is not None else (3 if smoke else None)
         agent_a = AgentA(backend, location=q["location"], sub_topic=q["sub_topic"],
                          max_paths=a_max_paths)
         
@@ -149,6 +149,9 @@ if __name__ == "__main__":
                    help="1 query / 1 topology / 1 loop — cheap first-run check")
     p.add_argument("--topology", choices=["static", "parallel", "sequential"],
                    default=None, help="run only this topology")
+    p.add_argument("--max_paths", type=int, default=None,
+                   help="cap Agent A paths per query (keeps Agent B cost bounded). "
+                        "Default: no cap for full runs, 3 for --smoke.")
     args = p.parse_args()
     run(args.model, args.max_loops, args.dtype, smoke=args.smoke,
-        only_topology=args.topology)
+        only_topology=args.topology, max_paths=args.max_paths)
