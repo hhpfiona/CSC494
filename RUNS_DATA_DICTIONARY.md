@@ -173,4 +173,7 @@ python inspect_run.py runs/ablation_20260616_135829.jsonl
 
 # Just the summary table:
 python inspect_run.py --summary-only
+
+# Read the whole thing in pretty JSON: 
+jq . runs/ablation_local__...143058.jsonl
 ```

@@ -10,3 +10,4 @@ venv/
 *.safetensors
 *.gguf
 report.txt
+pretty.txt
