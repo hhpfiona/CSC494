@@ -66,15 +66,38 @@ def load_hf_model(model_name: str, dtype: str = "bfloat16"):
     return model, tokenizer
 
 
+def load_queries(queries_path: str | None, smoke: bool):
+    """
+    Eval set loader. Default: the 2-item smoke fixture from run_ablation.QUERIES.
+    With --queries PATH, load a JSONL where each line is a query dict with keys
+    {query, location, sub_topic, ground_truth:{location,sub_topic,verified_points}}.
+    This is how the n=100 validation set and the full benchmark set are supplied
+    without editing code.
+    """
+    if not queries_path:
+        return QUERIES[:1] if smoke else QUERIES
+    items = []
+    with open(queries_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                items.append(json.loads(line))
+    logger.info("Loaded %d queries from %s", len(items), queries_path)
+    return items[:1] if smoke else items
+
+
 def run(model_name: str, max_loops: int, dtype: str, smoke: bool = False,
-        only_topology: str | None = None, max_paths: int | None = None):
+        only_topology: str | None = None, max_paths: int | None = None,
+        arms: tuple[str, ...] = ("no-context", "template"),
+        queries_path: str | None = None,
+        merge_threshold: float = 0.8, use_sbert: bool = True):
     model, tokenizer = load_hf_model(model_name, dtype)
 
     # ONE backend instance, shared by both agents and the arbiter.
     backend = LocalBackend(model_obj=model, tokenizer_obj=tokenizer, model_name=model_name)
 
     # Smoke mode: 1 query, 1 topology, 1 loop — cheapest possible real run.
-    queries = QUERIES[:1] if smoke else QUERIES
+    queries = load_queries(queries_path, smoke)
     topologies = (only_topology,) if only_topology else ("static", "parallel", "sequential")
     if smoke and not only_topology:
         topologies = ("sequential",)  # the most complex path, to shake out the loop
@@ -90,53 +113,63 @@ def run(model_name: str, max_loops: int, dtype: str, smoke: bool = False,
     summary_path = f"runs/ablation_{tag}_{safe_model}_{ts}_summary.json"
     records = []
 
-    for q in queries:
-        # Path cap keeps Agent B from running 3 critique calls x dozens of paths.
-        # Smoke defaults to 3; otherwise use --max_paths (None = no cap).
-        a_max_paths = max_paths if max_paths is not None else (3 if smoke else None)
-        agent_a = AgentA(backend, location=q["location"], sub_topic=q["sub_topic"],
-                         max_paths=a_max_paths)
-        
-        agent_b = AgentBCritiqueEngine(backend)
-        orch = CulturalAgentOrchestrator(agent_a, agent_b, arbiter_backend=backend)
+    for arm in arms:
+        use_context = (arm != "no-context")
+        context_mode = "template" if arm == "template" else ("llm" if arm == "llm-rewrite" else "template")
+        logger.info("=== ARM: %s (use_context=%s) ===", arm, use_context)
 
-        for topology in topologies:
-            if topology == "static":
-                result = orch.static_integration(q["query"], q["ground_truth"])
-            elif topology == "parallel":
-                result = orch.parallel_debate(q["query"], q["ground_truth"])
-            else:
-                result = orch.sequential_debate(q["query"], q["ground_truth"], max_loops=max_loops)
+        for q in queries:
+            # Path cap keeps Agent B from running 3 critique calls x dozens of paths.
+            # Smoke defaults to 3; otherwise use --max_paths (None = no cap).
+            a_max_paths = max_paths if max_paths is not None else (3 if smoke else None)
+            agent_a = AgentA(backend, location=q["location"], sub_topic=q["sub_topic"],
+                             max_paths=a_max_paths,
+                             reconstruct_graph=use_context,
+                             merge_threshold=merge_threshold, use_sbert=use_sbert)
 
-            rec = {
-                "model": model_name, "query": q["query"], "location": q["location"],
-                "topology": topology,
-                "n_final_paths": len(result.get("final_paths", [])),
-                "trace": result["trace"],
-            }
-            records.append(rec)
-            with open(jsonl_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec) + "\n")
-            logger.info("[%s | %s] approved=%s mean_precision=%.2f loops=%d repairs=%d",
-                        q["query"], topology, rec["trace"]["final_approved"],
-                        rec["trace"]["final_mean_precision"],
-                        rec["trace"]["loops"], rec["trace"]["repairs"])
+            agent_b = AgentBCritiqueEngine(backend)
+            orch = CulturalAgentOrchestrator(agent_a, agent_b, arbiter_backend=backend,
+                                             use_context=use_context, context_mode=context_mode)
 
+            for topology in topologies:
+                if topology == "static":
+                    result = orch.static_integration(q["query"], q["ground_truth"])
+                elif topology == "parallel":
+                    result = orch.parallel_debate(q["query"], q["ground_truth"])
+                else:
+                    result = orch.sequential_debate(q["query"], q["ground_truth"], max_loops=max_loops)
+
+                rec = {
+                    "model": model_name, "arm": arm, "query": q["query"],
+                    "location": q["location"], "topology": topology,
+                    "n_final_paths": len(result.get("final_paths", [])),
+                    "trace": result["trace"],
+                }
+                records.append(rec)
+                with open(jsonl_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec) + "\n")
+                logger.info("[%s | %s | %s] approved=%s mean_precision=%.2f loops=%d repairs=%d",
+                            arm, q["query"], topology, rec["trace"]["final_approved"],
+                            rec["trace"]["final_mean_precision"],
+                            rec["trace"]["loops"], rec["trace"]["repairs"])
+
+    # Aggregate per (arm, topology) so the ablation comparison is read directly.
     summary = {}
-    for topo in ("static", "parallel", "sequential"):
-        rs = [r for r in records if r["topology"] == topo]
-        n = len(rs) or 1
-        summary[topo] = {
-            "n_runs": len(rs),
-            "approval_rate": sum(r["trace"]["final_approved"] for r in rs) / n,
-            "avg_mean_precision": sum(r["trace"]["final_mean_precision"] for r in rs) / n,
-            "avg_loops": sum(r["trace"]["loops"] for r in rs) / n,
-            "avg_repairs": sum(r["trace"]["repairs"] for r in rs) / n,
-        }
+    for arm in arms:
+        for topo in ("static", "parallel", "sequential"):
+            rs = [r for r in records if r["arm"] == arm and r["topology"] == topo]
+            n = len(rs) or 1
+            summary[f"{arm}::{topo}"] = {
+                "arm": arm, "topology": topo, "n_runs": len(rs),
+                "approval_rate": sum(r["trace"]["final_approved"] for r in rs) / n,
+                "avg_mean_precision": sum(r["trace"]["final_mean_precision"] for r in rs) / n,
+                "avg_loops": sum(r["trace"]["loops"] for r in rs) / n,
+                "avg_repairs": sum(r["trace"]["repairs"] for r in rs) / n,
+            }
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     logger.info("Wrote %s and %s", jsonl_path, summary_path)
-    print("\n=== ABLATION SUMMARY (local) ===")
+    print("\n=== ABLATION SUMMARY (local, by arm x topology) ===")
     print(json.dumps(summary, indent=2))
 
 
@@ -152,6 +185,18 @@ if __name__ == "__main__":
     p.add_argument("--max_paths", type=int, default=None,
                    help="cap Agent A paths per query (keeps Agent B cost bounded). "
                         "Default: no cap for full runs, 3 for --smoke.")
+    p.add_argument("--arms", nargs="+", default=["no-context", "template"],
+                   choices=["no-context", "template", "llm-rewrite"],
+                   help="ablation arms to run (default: no-context template)")
+    p.add_argument("--queries", default=None,
+                   help="JSONL eval set (one query dict per line). Default: built-in "
+                        "2-item fixture. Use this to supply the n=100 / full set.")
+    p.add_argument("--no_sbert", action="store_true",
+                   help="force Jaccard merge instead of SBERT (for CPU/offline checks)")
+    p.add_argument("--merge_threshold", type=float, default=0.8,
+                   help="node-merge similarity threshold (default 0.8, matches CCKG)")
     args = p.parse_args()
     run(args.model, args.max_loops, args.dtype, smoke=args.smoke,
-        only_topology=args.topology, max_paths=args.max_paths)
+        only_topology=args.topology, max_paths=args.max_paths,
+        arms=tuple(args.arms), queries_path=args.queries,
+        merge_threshold=args.merge_threshold, use_sbert=not args.no_sbert)
