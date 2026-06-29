@@ -55,6 +55,10 @@ batch job.
 # Request a small interactive allocation (adjust time/mem down for opportunistic)
 salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=01:00:00 
 
+# if the wait is really long run commands below 
+squeue -u $USER --start      # estimated start time, if the scheduler can predict one
+squeue -j 64334176 -o "%.12i %.8T %.10M %.10l %.20S %R"   # state + reason
+
 # once the shell drops you onto the GPU node (e.g., from hhpfiona@narval3 --> hhpfiona@ng10104)
 cd ~/projects/def-enaskt/hhpfiona/CSC494
 

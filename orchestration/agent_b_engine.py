@@ -20,6 +20,7 @@ Optional graph contextualization (Option A — shared evidence):
 from __future__ import annotations
 import logging
 from typing import Optional
+import re
 
 from orchestration.llm_backend import LLMBackend
 from orchestration import bootstrap
@@ -31,6 +32,45 @@ EVAL_CULTURAL_GROUP_PROMPT = _pu.EVAL_CULTURAL_GROUP_PROMPT
 EVAL_TOPIC_PROMPT = _pu.EVAL_TOPIC_PROMPT
 
 logger = logging.getLogger(__name__)
+
+# helper: robust yes/no on a single judge response
+def _verdict_is_yes(res: str) -> bool:
+    """
+    Robust replacement for the fragile `"Yes" in res` test: strip markdown /
+    whitespace, look at the leading token. Avoids 'Yes' matching inside words
+    like 'Yesterday' or a verbose 'No, but yes in part...' answer.
+    """
+    if not res:
+        return False
+    s = res.strip().lstrip("*_#>-• ").strip()
+    head = re.split(r"[\s,.:;!]+", s, maxsplit=1)[0].lower() if s else ""
+    return head in ("yes", "y", "true", "correct", "aligned")
+
+
+# helper: cheap lexical overlap (no model call) 
+_STOP = {
+    "the", "a", "an", "of", "in", "on", "to", "and", "or", "is", "are", "was",
+    "were", "be", "been", "by", "for", "with", "as", "that", "this", "their",
+    "they", "it", "its", "at", "from", "may", "can", "such", "which", "who",
+}
+
+
+def _tokens(text: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if w not in _STOP and len(w) > 2}
+
+
+def _lexical_covers(path_text: str, point_text: str, threshold: float = 0.34) -> bool:
+    """
+    Deterministic, model-free coverage test: does the path share enough content
+    tokens with the verified point? Recall-of-point-tokens-in-path >= threshold.
+    Conservative; meant as a reproducible floor, not a semantic judge.
+    """
+    pt = _tokens(point_text)
+    if not pt:
+        return False
+    overlap = len(pt & _tokens(path_text)) / len(pt)
+    return overlap >= threshold
 
 
 class AgentBCritiqueEngine:
@@ -126,10 +166,138 @@ class AgentBCritiqueEngine:
                 accumulated_feedback.append(
                     f"Offending Path: '{item.get('llm_result','')}' -> Reason: {ev['feedback']}")
         mean_precision = sum(scores) / len(scores) if scores else 0.0
+        path_texts = [item.get("llm_result", "") for item in agent_a_payload_list]
+        kp = self.score_knowledge_points(path_texts, ground_truth_schema,
+                                         mode="judge", max_paths_scored=5)
         return {
             "approved": all_approved, "mean_precision": mean_precision,
             "n_paths": len(agent_a_payload_list), "per_path": per_path,
             "context_used": bool(context),  # log the ablation arm for this batch
             "feedback": "\n".join(accumulated_feedback) if accumulated_feedback
                         else "All structural reasoning paths passed CulFiT verification.",
+            "kp": kp,
         }
+    
+    # The existing `precision_score` in evaluate_single_path is CulFiT's metric:
+    #     (#"Yes" among 3 rubric labels) / 3
+    # i.e. a binary judge over Cultural-Group / Topic / Knowledge-Path alignment.
+    # It saturates to 1.0 on plausible paths and does NOT count how many of the
+    # ground-truth `verified_points` a path actually covers. That binary judge must
+    # stay intact (it drives `approved` and the repair loop, and is the number
+    # comparable to CulFiT's own reported metric).
+    #
+    # This addition computes a SEPARATE, point-level score over verified_points:
+    #   - kp_recall    : fraction of ground-truth verified_points covered by the
+    #                    path set (did the system surface the right facts?)
+    #   - kp_precision : fraction of generated paths that map to >=1 verified_point
+    #                    (are the generated paths on-target rather than generic?)
+    # These are additive: existing fields are unchanged, so no control flow or
+    # CulFiT-comparability is affected. Everything new lives under new dict keys.
+
+    # COST NOTE
+    # Judge mode issues (n_paths * n_points) extra chat() calls per critique. That is
+    # why it is OPT-IN (score_kpts=False by default). For a cheap first pass, mode
+    # "lexical" uses token-overlap and makes ZERO model calls — good for a fast
+    # variance check before paying for the judge-based version on the full run.
+    #
+    # kp_recall via the LLM judge is still an LLM-graded metric; it is more
+    # discriminating than the binary rubric but not an oracle. It is a
+    # LLM-judged knowledge-point recall, not as exact-match F1, unless we also
+    # add a human-checked subset. The lexical mode is fully deterministic and
+    # reproducible, which makes it a good sanity floor.
+    
+    # single point x single path: does the path express this fact? 
+    def _point_covered_by_path_llm(self, path_text: str, point_text: str,
+                                   cultural_group: str) -> bool:
+        """One judge call: does `path_text` express or entail `point_text`?"""
+        prompt = (
+            "You are checking whether a candidate reasoning path expresses a "
+            "specific ground-truth cultural fact.\n"
+            f"Cultural group: {cultural_group}\n"
+            f"Candidate reasoning path:\n{path_text}\n\n"
+            f"Ground-truth fact:\n{point_text}\n\n"
+            "Does the candidate path express, entail, or directly support the "
+            "ground-truth fact? Answer with a single word: Yes or No."
+        )
+        res = self.backend.chat([{"role": "user", "content": prompt}],
+                                temperature=0.0) or ""
+        return _verdict_is_yes(res)
+
+    # knowledge-point scoring over a set of paths 
+    def score_knowledge_points(self, path_texts: list[str], ground_truth: dict,
+                               mode: str = "lexical",
+                               max_paths_scored: int | None = None) -> dict:
+        """
+        Compute point-level recall/precision of the generated paths against
+        ground_truth['verified_points'].
+
+        mode = "lexical" : deterministic token overlap, ZERO model calls (fast).
+        mode = "judge"   : one chat() per (path, point) pair (slow, semantic).
+
+        Returns a dict (all NEW keys; nothing here mutates existing scores):
+          {
+            "kp_recall": float,        # covered_points / total_points
+            "kp_precision": float,     # on_target_paths / total_paths
+            "n_points": int,
+            "n_points_covered": int,
+            "covered_points": [str, ...],
+            "missed_points": [str, ...],
+            "kp_mode": "lexical" | "judge",
+          }
+        """
+        points = ground_truth.get("verified_points", []) or []
+        group = ground_truth.get("location", "Unknown")
+        n_points = len(points)
+
+        # Cost cap: in judge mode, scoring every generated path against every
+        # point is n_paths * n_points model calls. Agent A can emit 30+ paths, so
+        # we cap how many paths are scored. We keep the FIRST max_paths_scored
+        # paths (Agent A emits them in generation order; this is a deterministic,
+        # reproducible subset — NOT a quality ranking, so report it as such).
+        # n_paths_total is preserved for honesty about the denominator.
+        n_paths_total = len(path_texts)
+        scored_paths = path_texts
+        if max_paths_scored is not None and n_paths_total > max_paths_scored:
+            scored_paths = path_texts[:max_paths_scored]
+        n_paths = len(scored_paths)
+
+        if n_points == 0 or n_paths == 0:
+            # Vacuous case made explicit rather than silently scoring 1.0.
+            return {
+                "kp_recall": 0.0, "kp_precision": 0.0,
+                "n_points": n_points, "n_points_covered": 0,
+                "n_paths_scored": n_paths, "n_paths_total": n_paths_total,
+                "covered_points": [], "missed_points": list(points),
+                "kp_mode": mode, "note": "no points or no paths",
+            }
+
+        def covers(path_text, point_text):
+            if mode == "judge":
+                return self._point_covered_by_path_llm(path_text, point_text, group)
+            return _lexical_covers(path_text, point_text)
+
+        # Compute the path x point coverage grid ONCE (the old code ran covers()
+        # twice — recall loop + precision loop — doubling judge-mode calls).
+        grid = [[covers(p, pt) for pt in points] for p in scored_paths]
+
+        covered_points, missed_points = [], []
+        for j, pt in enumerate(points):
+            if any(grid[i][j] for i in range(n_paths)):
+                covered_points.append(pt)
+            else:
+                missed_points.append(pt)
+
+        on_target_paths = sum(1 for i in range(n_paths) if any(grid[i]))
+
+        return {
+            "kp_recall": len(covered_points) / n_points,
+            "kp_precision": on_target_paths / n_paths,
+            "n_points": n_points,
+            "n_points_covered": len(covered_points),
+            "n_paths_scored": n_paths,
+            "n_paths_total": n_paths_total,
+            "covered_points": covered_points,
+            "missed_points": missed_points,
+            "kp_mode": mode,
+        }
+
