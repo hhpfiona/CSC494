@@ -152,12 +152,13 @@ class AgentBCritiqueEngine:
                         else "Culturally verified and validated.",
         }
 
-    def evaluate_payload_batch(self, agent_a_payload_list: list[dict],
-                               ground_truth_schema: dict,
-                               context: Optional[str] = None) -> dict:
+    def evaluate_payload_batch(self, agent_a_payload_list, 
+                               ground_truth_schema,
+                               context=None, max_paths_binary=5):
+        scored_payload = agent_a_payload_list[:max_paths_binary] if max_paths_binary else agent_a_payload_list
         all_approved = True
         accumulated_feedback, scores, per_path = [], [], []
-        for item in agent_a_payload_list:
+        for item in scored_payload:
             ev = self.evaluate_single_path(item, ground_truth_schema, context=context)
             scores.append(ev["precision_score"])
             per_path.append({"path": item.get("llm_result", ""), **ev})

@@ -212,10 +212,31 @@ class CulturalAgentOrchestrator:
             )
             repaired = self._coerce_paths(self.agent_a.repair(repair_prompt), current)
             repairs += 1
-            current = repaired if repaired else current
-            # Paths changed -> recompute context so the evidence Agent B sees in
-            # the next iteration matches the repaired paths (not stale context).
-            context, last_central = self._recontextualize(current)
+            # Path-collapse guard. The sequential repair loop can probabilistically
+            # collapse the path set (e.g. 27 -> 1, or -> 0), which can FAKE an
+            # approval on a near-empty set and inflate approval rates without
+            # better reasoning. We reject a repair that (a) is empty or (b) shrinks
+            # the set below a floor relative to the pre-repair count, keeping the
+            # prior paths instead. We log it so collapses are visible in the trace
+            # rather than silently shaping the metric.
+            n_before = len(current)
+            n_after = len(repaired) if repaired else 0
+            collapse_floor = max(2, int(0.5 * n_before))  # require >=50% retained, min 2
+            if n_after < collapse_floor:
+                logger.warning(
+                    "[sequential] repair collapsed %d -> %d paths (floor=%d); "
+                    "rejecting repair, keeping prior paths.",
+                    n_before, n_after, collapse_floor)
+                collapsed = True
+                # keep `current` unchanged; do NOT recompute context from a bad set
+            else:
+                current = repaired
+                collapsed = False
+                # Paths changed -> recompute context so the evidence Agent B sees in
+                # the next iteration matches the repaired paths (not stale context).
+                context, last_central = self._recontextualize(current)
+            iterations[-1]["repair_collapsed"] = collapsed
+            iterations[-1]["n_paths_after_repair"] = n_after
 
         return {
             "mode": "sequential",
