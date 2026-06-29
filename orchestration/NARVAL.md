@@ -68,7 +68,7 @@ module load StdEnv/2023 gcc/12.3 rust/1.76.0 python/3.11 arrow/16 cuda/12.2
 # build a node-local venv (fast, avoids stale metadata)
 python -m venv $SLURM_TMPDIR/env && source $SLURM_TMPDIR/env/bin/activate
 pip install --no-index --upgrade pip
-pip install --no-index torch transformers tokenizers sentence-transformers \
+pip install --no-index requests torch transformers tokenizers sentence-transformers \
     accelerate openai pandas openpyxl tenacity tqdm pydantic python-dotenv
 
 export HF_HOME=$SCRATCH/hf_cache
