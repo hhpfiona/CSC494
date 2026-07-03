@@ -78,6 +78,14 @@ fi
 # 4. Run (single arm)
 mkdir -p runs
 echo "Ablation: MODEL=$MODEL QUERIES=$QUERIES ARMS=$ARMS MAX_LOOPS=$MAX_LOOPS MAX_PATHS=$MAX_PATHS"
+
+# Fail fast if SBERT isn't cached — otherwise the template arm silently
+# falls back to Jaccard and the 12h run repeats the same defect.
+if [ "$ARMS" = "template" ] || [ "$ARMS" = "llm-rewrite" ]; then
+    python -c "import os; os.environ['HF_HUB_OFFLINE']='1'; from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('SBERT loads offline OK')" \
+        || { echo "FATAL: SBERT not cached offline; run the Step-0 pre-cache on a login node first." >&2; exit 1; }
+fi
+
 python -m orchestration.run_local \
     --model "$MODEL" \
     --queries "$QUERIES" \
