@@ -16,7 +16,16 @@ so keep jobs modest and expect variable queue times.
 cd ~/projects/def-enaskt/hhpfiona/CSC494
 module load python/3.11
 pip install --user huggingface_hub
+pip install --user sentence-transformers
 export HF_HOME=$SCRATCH/hf_cache       # big files belong in scratch, not project
+
+# pre cache SBERT
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('SBERT cached to', '$HF_HOME')"
+
+# verify it actually cached
+# If that find returns a path, the compute node will load SBERT offline. If it returns nothing, the rerun will silently fall back to Jaccard again 
+find $SCRATCH/hf_cache -iname "*minilm*" -type d | head
+
 hf auth login                 # needed for gated models like Llama
 hf download meta-llama/Llama-3.1-8B-Instruct \
     --local-dir $SCRATCH/models/llama31-8b
