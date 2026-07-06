@@ -8,35 +8,62 @@ so keep jobs modest and expect variable queue times.
 > weights, pip packages from PyPI, HF datasets) must be fetched on a **login
 > node** first, then read from disk inside the job.
 
+> **Windows editors add CRLF line endings that break bash.** After editing any
+> `.slurm` or `.sh` on Windows, run `dos2unix <file>` on Narval (or set
+> `git config --global core.autocrlf input` once, locally, so git strips CRLF
+> on commit). Verify a script with `bash -n <file>` before submitting.
+
 ---
 
-## Step 0 (once) — Pre-download the model on a LOGIN node
+## Step 0 (once) — Pre-download model + SBERT on a LOGIN node
+
+Use a **venv in $SCRATCH**, not `pip install --user`. The `--user` site
+(`~/.local`) previously got corrupted (broke `import yaml`, caused `Errno 5` I/O
+errors); a scratch venv sidesteps it and doesn't touch home quota.
 
 ```bash
 cd ~/projects/def-enaskt/hhpfiona/CSC494
 module load python/3.11
-pip install --user huggingface_hub
-pip install --user sentence-transformers
+
+# One-time login-node venv for downloads/pre-caching (lives in scratch).
+python -m venv $SCRATCH/precache_env
+source $SCRATCH/precache_env/bin/activate
+pip install --no-index --upgrade pip
+# IMPORTANT: install `requests` in the SAME command as sentence-transformers.
+# The Alliance sentence-transformers wheel does NOT pull requests automatically,
+# and the pre-cache line below imports it — omit requests and it crashes with
+# "ModuleNotFoundError: No module named 'requests'" BEFORE caching anything.
+pip install --no-index huggingface_hub sentence-transformers requests
+
 export HF_HOME=$SCRATCH/hf_cache       # big files belong in scratch, not project
 
-# pre cache SBERT
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('SBERT cached to', '$HF_HOME')"
+# --- Pre-cache SBERT (all-MiniLM-L6-v2) so the air-gapped job can load it ---
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('SBERT cached OK')"
 
-# verify it actually cached
-# If that find returns a path, the compute node will load SBERT offline. If it returns nothing, the rerun will silently fall back to Jaccard again 
+# Verify it landed on disk (must return a path; empty => NOT cached, do not submit):
 find $SCRATCH/hf_cache -iname "*minilm*" -type d | head
 
+# Verify it loads in OFFLINE mode — this is exactly what the batch job does.
+# 'offline load OK' with no traceback == the job's SBERT check will pass.
+HF_HUB_OFFLINE=1 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('offline load OK')"
+
+# --- Download the Llama weights (gated model, needs auth) ---
 hf auth login                 # needed for gated models like Llama
 hf download meta-llama/Llama-3.1-8B-Instruct \
     --local-dir $SCRATCH/models/llama31-8b
     # only need to download once
+
+deactivate   # done with the login-node precache venv
 ```
 
-Then you can point `--model` either at the HF id (resolved from `$HF_HOME`) or
-directly at `$SCRATCH/models/llama31-8b`. The local dir is the most reliable
-offline.
+Then point `--model` at `$SCRATCH/models/llama31-8b` (a local dir is the most
+reliable offline). If using a different model, e.g. qwen25-7b, point `--model`
+at `$SCRATCH/models/qwen25-7b`.
 
-If using a different model, say qwen25-7b, then point --model at $SCRATCH/models/qwen25-7b, same as before.
+If SBERT is NOT pre-cached, the template / llm-rewrite jobs will silently fall
+back to Jaccard token-overlap for graph node merging (weaker). The batch script
+now fails fast at minute 1 if SBERT can't load offline, so a missing cache costs
+seconds, not a 12h slot.
 
 ---
 
@@ -57,24 +84,22 @@ renamed.
 ## Step 2 — Cheap smoke test via `salloc` (interactive, 1 query / 1 topology / 1 loop)
 
 Grab a short interactive GPU session and run the smallest possible real job.
-This shakes out env/model/parsing problems for pennies before you submit a full
-batch job.
+This shakes out env/model/parsing problems for pennies before a full batch job.
 
 ```bash
-# Request a small interactive allocation (adjust time/mem down for opportunistic)
-salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=01:00:00 
+salloc --account=def-enaskt --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=00:40:00
 
-# if the wait is really long run commands below 
-squeue -u $USER --start      # estimated start time, if the scheduler can predict one
-squeue -j 64334176 -o "%.12i %.8T %.10M %.10l %.20S %R"   # state + reason
+# if the wait is long:
+squeue -u $USER --start      # estimated start time, if predictable
+squeue -j <jobid> -o "%.12i %.8T %.10M %.10l %.20S %R"   # state + reason
 
-# once the shell drops you onto the GPU node (e.g., from hhpfiona@narval3 --> hhpfiona@ng10104)
+# once on the GPU node (prompt changes e.g. hhpfiona@narval3 -> hhpfiona@ng10104)
 cd ~/projects/def-enaskt/hhpfiona/CSC494
 
 module purge
 module load StdEnv/2023 gcc/12.3 rust/1.76.0 python/3.11 arrow/16 cuda/12.2
 
-# build a node-local venv (fast, avoids stale metadata)
+# node-local venv (fast, avoids stale metadata). Note: requests IS in the list.
 python -m venv $SLURM_TMPDIR/env && source $SLURM_TMPDIR/env/bin/activate
 pip install --no-index --upgrade pip
 pip install --no-index requests torch transformers tokenizers sentence-transformers \
@@ -83,53 +108,66 @@ pip install --no-index requests torch transformers tokenizers sentence-transform
 export HF_HOME=$SCRATCH/hf_cache
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 
-# STAGE the model to node-local SSD first — loading 16GB straight off /scratch
-# (Lustre) is very slow. Copy once (sequential = fast), then load from local disk.
+# Stage model to node-local SSD (loading 16GB off Lustre is slow).
 time cp -r $SCRATCH/models/llama31-8b $SLURM_TMPDIR/llama31-8b
 
-# the smoke test: 1 query, sequential only, max_loops=1 — loads from LOCAL disk
+# Smoke: 1 query, sequential only, max_loops=1 — loads from LOCAL disk.
 python -m orchestration.run_local \
     --model $SLURM_TMPDIR/llama31-8b \
+    --queries CulFiT/GlobalCultureQA/eval_set_n100.jsonl \
     --smoke
 
-# when done
 exit   # releases the salloc allocation
 ```
 
-What `--smoke` does: 1 query, the `sequential` topology only, `max_loops=1`.
-It exercises the full real path — model load, Agent A generate, Agent B critique,
-one repair — so if JSON parsing of real Llama output is going to break, it breaks
-here cheaply. Check `runs/ablation_smoke_*.jsonl` for the trace.
-
-You can also target one topology explicitly, e.g. `--topology static`.
+`--smoke` = 1 query, sequential topology, max_loops=1. It exercises the full
+path (model load, Agent A generate, Agent B critique, one repair), so JSON
+parsing of real Llama output breaks here cheaply. Check `runs/ablation_smoke_*.jsonl`.
 
 ---
 
-## Step 3 — Full batch run
+## Step 3 — Full batch run (ONE ARM per job; 12h wall)
 
-Once the smoke test passes, submit the real job:
+Full-100 both-arms is ~20-26 GPU-hours and does NOT fit 12h, so run one arm per
+job via the `ARMS` env var. Records append per-query, so a timeout still leaves
+partial results.
 
 ```bash
-cd ~/projects/def-enaskt/hhpfiona/CSC494
-# optional overrides: export MODEL_SRC=$SCRATCH/models/llama31-8b MAX_LOOPS=3 MAX_PATHS=12
-sbatch orchestration/run_ablation.slurm
+cd ~/projects/def-enaskt/hhpfiona/CSC494 && mkdir -p runs
+
+# If you edited the script on Windows, normalize line endings first:
+dos2unix orchestration/run_ablation.slurm
+bash -n orchestration/run_ablation.slurm && echo "syntax OK"
+
+# no-context builds no graph (SBERT irrelevant) — reuse existing data, or:
+ARMS=no-context  sbatch orchestration/run_ablation.slurm
+ARMS=template    sbatch orchestration/run_ablation.slurm    # needs SBERT pre-cached
+ARMS=llm-rewrite sbatch orchestration/run_ablation.slurm    # needs SBERT pre-cached
+
 squeue -u $USER          # watch the queue
 ```
 
-Logs stream to `runs/slurm_pluraltree_ablation_<jobid>.out`. Results land in
-`runs/ablation_local_*.jsonl` and `*_summary.json`.
+When a template/llm-rewrite job starts, confirm SBERT loaded (NOT Jaccard):
+
+```bash
+grep -i "SBERT\|Jaccard" runs/slurm_pluraltree_ablation_<jobid>.err | head
+# want "Graph reconstruction using SBERT ..."; if "falling back to Jaccard",
+# cancel and re-run the Step-0 pre-cache — the model wasn't cached.
+```
+
+Logs: `runs/slurm_pluraltree_ablation_<jobid>.out` (and `.err` for INFO logs).
+Results: `runs/ablation_local_*.jsonl` and `*_summary.json`.
 
 > The batch script stages the model from `MODEL_SRC` (a /scratch dir) to
-> node-local SSD automatically before loading, so you don't hit the slow-Lustre
-> problem. `MODEL_SRC` defaults to `$SCRATCH/models/llama31-8b` — override it if
-> your weights live elsewhere. If you set `MODEL_SRC` to a bare HF id instead of
-> a directory, staging is skipped and transformers loads from `$HF_HOME`.
+> node-local SSD before loading. `MODEL_SRC` defaults to
+> `$SCRATCH/models/llama31-8b`; override if weights live elsewhere. A bare HF id
+> (not a dir) skips staging and loads from `$HF_HOME`.
 
 ---
 
 ## Module versions — adjust to what Narval currently exposes
 
 The `module load` lines are best-guess. Confirm with `module spider <name>` and
-swap versions as needed. The one rule that's not optional: **load `rust` before
-installing `vllm`/`tokenizers`** (from the Agent A handoff — it's what caused the
-"invalid wheel" failures). Prefer `--no-index` (Alliance wheels) over PyPI.
+swap versions as needed. Not optional: **load `rust` before installing
+`vllm`/`tokenizers`** (caused "invalid wheel" failures). Prefer `--no-index`
+(Alliance wheels) over PyPI.
