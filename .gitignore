@@ -9,5 +9,4 @@ venv/
 *.bin
 *.safetensors
 *.gguf
-report.txt
-pretty.txt
+run_ablation.txt
