@@ -37,6 +37,10 @@ import logging
 import os
 from datetime import datetime
 
+import os as _os
+_os.environ.setdefault("HF_HUB_OFFLINE", "1")
+_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from orchestration import bootstrap
 bootstrap.install()
 
@@ -103,14 +107,43 @@ def build_providers(systems, backend, evaluator, max_loops):
         if s == "culfit_baseline":
             providers[s] = culfit_baseline_provider(evaluator)
         elif s.startswith("agentic_"):
-            topo = s.split("agentic_", 1)[1] or "sequential"
-            providers[s] = agentic_answer_provider(orch_factory, evaluator, topology=topo)
+            rest = s.split("agentic_", 1)[1] or "sequential"
+            # optional "_terse" / "_verbose" suffix selects the answer style;
+            # default is verbose (the original prompt).
+            style = "verbose"
+            for suf in ("_terse", "_verbose"):
+                if rest.endswith(suf):
+                    style = suf[1:]
+                    rest = rest[: -len(suf)]
+                    break
+            topo = rest or "sequential"
+            providers[s] = agentic_answer_provider(
+                orch_factory, evaluator, topology=topo, style=style)
         else:
             raise SystemExit(f"unknown system '{s}'")
     return providers
 
 
-def run(model_name, dtype, queries, systems, max_loops, smoke, limit):
+def _load_done(resume_path):
+    """Return set of (system, idx) already completed in a prior partial run."""
+    done = set()
+    if resume_path and os.path.exists(resume_path):
+        with open(resume_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    done.add((r.get("system"), r.get("idx")))
+                except json.JSONDecodeError:
+                    continue  # skip a half-written final line from a kill
+        logger.info("Resume: %d (system,item) pairs already done in %s",
+                    len(done), resume_path)
+    return done
+
+
+def run(model_name, dtype, queries, systems, max_loops, smoke, limit, resume=None):
     items = load_items(queries, smoke, limit)
     model, tokenizer = load_hf_model(model_name, dtype)
     backend = LocalBackend(model_obj=model, tokenizer_obj=tokenizer, model_name=model_name)
@@ -119,15 +152,25 @@ def run(model_name, dtype, queries, systems, max_loops, smoke, limit):
     evaluator = TaskEvaluator(backend)
     providers = build_providers(systems, backend, evaluator, max_loops)
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Resume appends to the SAME file so one file holds the whole run; a fresh
+    # run opens a new timestamped file.
+    done = _load_done(resume)
+    if resume:
+        out_path = resume
+        mode = "a"
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = f"runs/answers_{ts}.jsonl"
+        mode = "w"
     os.makedirs("runs", exist_ok=True)
-    out_path = f"runs/answers_{ts}.jsonl"
 
     n_written = 0
-    with open(out_path, "w", encoding="utf-8") as f:
+    with open(out_path, mode, encoding="utf-8") as f:
         for name, provider in providers.items():
             logger.info("=== GENERATE: %s (n=%d) ===", name, len(items))
             for i, item in enumerate(items):
+                if (name, i) in done:
+                    continue  # already generated in a prior (timed-out) run
                 gt = item.get("ground_truth", item)
                 try:
                     answer = provider(item)
@@ -145,11 +188,13 @@ def run(model_name, dtype, queries, systems, max_loops, smoke, limit):
                     "answer": answer,
                 }
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                f.flush()          # survive a SLURM kill: don't lose buffered lines
+                os.fsync(f.fileno())
                 n_written += 1
                 logger.info("[%s] %d/%d generated (%d chars)",
                             name, i + 1, len(items), len(answer or ""))
 
-    logger.info("Wrote %d answer records to %s", n_written, out_path)
+    logger.info("Wrote %d NEW answer records to %s", n_written, out_path)
     print(f"\nGeneration complete: {out_path}")
     print(f"Next: python -m orchestration.run_judge --answers {out_path} "
           f"--judge_model <big-model>")
@@ -166,7 +211,10 @@ if __name__ == "__main__":
     p.add_argument("--max_loops", type=int, default=3)
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--resume", default=None,
+                   help="append to and skip (system,idx) already in this "
+                        "answers file (for resuming a timed-out run)")
     args = p.parse_args()
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     run(args.model, args.dtype, args.queries, systems,
-        args.max_loops, args.smoke, args.limit)
+        args.max_loops, args.smoke, args.limit, resume=args.resume)

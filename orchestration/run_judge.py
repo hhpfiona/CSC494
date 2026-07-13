@@ -43,6 +43,9 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from orchestration import bootstrap
 bootstrap.install()
 
