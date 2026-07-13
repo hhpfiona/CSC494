@@ -3,7 +3,12 @@ Task-alignment diagnostic (PluralTree).
 
 WHAT QUESTION THIS ANSWERS
 --------------------------
-Agent A's cultural-graph augmentation aligns with Agent B's GlobalCultureQA task?
+The professor's July 9 reframe: the null augmentation result may not be a bug —
+it may mean the two tasks are not *aligned*, i.e. Agent A's cultural-graph
+augmentation does not carry signal for Agent B's GlobalCultureQA task. Before any
+more topology ablation, we need one artifact that measures exactly that, and that
+lets us *read the reasoning* to see where augmentation helped, hurt, or was
+ignored.
 
 WHAT THIS RUNS
 --------------
@@ -14,11 +19,19 @@ repair loop — we are testing alignment, not repair dynamics):
     arm B  "augmented"   : Agent A generate_with_context() -> same scoring, context ON
 
 Both arms score the SAME generated paths against the SAME ground-truth
-verified_points using the existing on-task metric:
-    - CulFiT binary rubric precision (evaluate_payload_batch -> mean_precision)
-    - point-level kp_recall / kp_precision (score_knowledge_points, judge mode)
-so the F1 below is the *on-task* F1 the professor asked for (kp_precision &
-kp_recall harmonic mean), not inter-agent agreement.
+verified_points using the existing on-task metrics:
+    - PRIMARY: CulFiT rubric mean_precision (evaluate_payload_batch). The engine
+      threads the augmentation context into the Knowledge-Path check, so THIS
+      metric responds to the augmentation. The per-query delta is computed on it.
+    - SECONDARY: point-level kp_recall / kp_f1 (score_knowledge_points). The
+      engine's point-coverage judge takes NO context argument, so kp_f1 is
+      context-BLIND and is identical across arms by construction. It is recorded
+      as a descriptive coverage number, NOT used for the delta.
+
+Why rubric and not kp_f1: a first pass mistakenly put the delta on kp_f1, which
+the augmentation never reaches — the delta was pinned to zero regardless of
+alignment. The rubric metric is the lever the augmentation was designed to move,
+so measuring the delta there is what actually answers the professor's question.
 
 The ONLY thing that differs between the two arms is whether Agent A's
 reconstructed context is shown to Agent B's knowledge-path judge. That isolates
@@ -33,10 +46,12 @@ runs/align_<tag>_<model>_<ts>.jsonl        one record per (query, arm) with the
                                            full Agent B trace + kp block + the
                                            context string that was shown (arm B)
 runs/align_<tag>_<model>_<ts>_deltas.jsonl one record per query: paired
-                                           no-context vs augmented scores and the
-                                           per-query delta (helped / hurt / same)
-runs/align_<tag>_<model>_<ts>_summary.json aggregate: mean F1 per arm, mean
-                                           delta, and a helped/hurt/same tally
+                                           no-context vs augmented RUBRIC scores,
+                                           the per-query delta (helped/hurt/same),
+                                           per-dimension rubric verdicts, and the
+                                           secondary context-blind kp_f1 numbers
+runs/align_<tag>_<model>_<ts>_summary.json aggregate: mean rubric precision per
+                                           arm, mean delta, helped/hurt/same tally
 
 The deltas + traces are the reasoning-log material the professor wants: you can
 open the jsonl and read, per query, the augmentation string and whether it moved
@@ -88,10 +103,17 @@ def score_arm(agent_b, paths, ground_truth, context, kp_mode, max_paths_scored,
 
     Uses the existing engine methods unchanged:
       - evaluate_payload_batch : CulFiT binary rubric -> mean_precision, per_path
-        verdicts (Group/Topic/Knowledge-Path). context is threaded into the KP
-        check only, exactly as the engine already does.
+        verdicts (Group/Topic/Knowledge-Path). context IS threaded into the
+        knowledge-path check here, so `rubric_mean_precision` is the metric that
+        actually RESPONDS to the augmentation. This is the PRIMARY alignment
+        signal (the delta is computed on it).
       - score_knowledge_points : point-level kp_recall / kp_precision against
-        verified_points. This is the on-task signal the professor asked for.
+        verified_points. NOTE: the engine's point-coverage judge does NOT take a
+        context argument, so kp_f1 is context-BLIND by construction — it is
+        recorded as a SECONDARY descriptive number (how much of the golden set
+        the paths cover) but is NOT used for the delta. Threading context into
+        point coverage would be a separate engine change (Option B), deliberately
+        not taken here.
     """
     path_texts = [p.get("llm_result", "") for p in paths]
 
@@ -246,7 +268,9 @@ def run(mode, model_name, dtype, queries_path, n, kp_mode,
 
     queries = load_queries(queries_path, n)
 
-    f1_none, f1_ctx, deltas = [], [], []
+    # PRIMARY signal = CulFiT rubric mean_precision, which context flows into.
+    # kp_f1 is retained per-arm as a SECONDARY, context-blind descriptor only.
+    rub_none, rub_ctx, deltas = [], [], []
     tally = {"helped": 0, "hurt": 0, "same": 0}
 
     for q in queries:
@@ -259,13 +283,14 @@ def run(mode, model_name, dtype, queries_path, n, kp_mode,
 
         out = run_query(agent_a, agent_b, q, kp_mode, max_paths_scored, max_paths_binary)
 
-        n_f1 = out["no_context"]["kp_f1"]
-        c_f1 = out["augmented"]["kp_f1"]
-        delta = c_f1 - n_f1
+        # Delta is on the rubric metric — the number the augmentation can move.
+        n_rub = out["no_context"]["rubric_mean_precision"]
+        c_rub = out["augmented"]["rubric_mean_precision"]
+        delta = c_rub - n_rub
         cls = classify_delta(delta)
         tally[cls] += 1
-        f1_none.append(n_f1)
-        f1_ctx.append(c_f1)
+        rub_none.append(n_rub)
+        rub_ctx.append(c_rub)
         deltas.append(delta)
 
         # One rich record per (query, arm) for reading the reasoning later.
@@ -282,48 +307,63 @@ def run(mode, model_name, dtype, queries_path, n, kp_mode,
                 }) + "\n")
 
         # One paired delta record per query — the alignment signal, readable.
+        # Primary fields are rubric_*; kp_f1_* kept as secondary context-blind refs.
         with open(delta_path, "a", encoding="utf-8") as f:
             f.write(json.dumps({
                 "query": q["query"], "location": q["location"],
                 "n_paths": out["n_paths"],
-                "f1_no_context": n_f1, "f1_augmented": c_f1, "delta_f1": delta,
-                "class": cls,
-                "recall_no_context": out["no_context"]["kp_recall"],
-                "recall_augmented": out["augmented"]["kp_recall"],
-                "precision_no_context": out["no_context"]["kp_precision"],
-                "precision_augmented": out["augmented"]["kp_precision"],
+                # PRIMARY: rubric mean_precision, the context-sensitive signal
+                "rubric_no_context": n_rub, "rubric_augmented": c_rub,
+                "delta_rubric": delta, "class": cls,
+                # per-dimension rubric verdicts, so you can SEE which of Group /
+                # Topic / Knowledge-Path the context flipped (or didn't)
+                "per_path_no_context": out["no_context"]["per_path"],
+                "per_path_augmented": out["augmented"]["per_path"],
+                # SECONDARY (context-blind): point coverage, for descriptive value
+                "kp_f1_no_context": out["no_context"]["kp_f1"],
+                "kp_f1_augmented": out["augmented"]["kp_f1"],
+                "kp_recall_no_context": out["no_context"]["kp_recall"],
+                "kp_recall_augmented": out["augmented"]["kp_recall"],
                 "missed_no_context": out["no_context"]["missed_points"],
                 "missed_augmented": out["augmented"]["missed_points"],
                 "context_str": out["context_str"],
             }) + "\n")
 
-        logger.info("[%s | %s] F1 none=%.3f aug=%.3f  delta=%+.3f (%s)",
-                    q["location"], q["query"], n_f1, c_f1, delta, cls)
+        logger.info("[%s | %s] rubric none=%.3f aug=%.3f  delta=%+.3f (%s)  [kp_f1 none=%.3f aug=%.3f, ctx-blind]",
+                    q["location"], q["query"], n_rub, c_rub, delta, cls,
+                    out["no_context"]["kp_f1"], out["augmented"]["kp_f1"])
 
     n_q = len(queries) or 1
-    mean_none = sum(f1_none) / n_q
-    mean_ctx = sum(f1_ctx) / n_q
+    mean_none = sum(rub_none) / n_q
+    mean_ctx = sum(rub_ctx) / n_q
     mean_delta = sum(deltas) / n_q
     summary = {
         "n_queries": len(queries),
         "mode": mode, "model": model_name, "kp_mode": kp_mode,
         "topology": "static (no repair) — alignment diagnostic",
-        "mean_f1_no_context": mean_none,
-        "mean_f1_augmented": mean_ctx,
-        "mean_delta_f1": mean_delta,
+        "primary_metric": ("CulFiT rubric mean_precision (Group/Topic/Knowledge-"
+                           "Path). Context is threaded into the Knowledge-Path "
+                           "check, so this metric responds to augmentation."),
+        "mean_rubric_no_context": mean_none,
+        "mean_rubric_augmented": mean_ctx,
+        "mean_delta_rubric": mean_delta,
         "tally": tally,
-        # Honesty caveat baked in, mirroring the ablation summaries: absolute F1
-        # is judge-model-dependent and NOT comparable to CulFiT Table 1 (GPT-4o-
-        # mini). Only the within-protocol delta (augmented - no_context) is the
-        # defensible alignment signal here.
-        "comparability": ("within-protocol delta only; absolute F1 depends on the "
-                          f"judge ({model_name or 'mock'}) and is NOT comparable to "
-                          "CulFiT's reported numbers"),
+        # Honesty caveat: absolute rubric precision is judge-model-dependent and
+        # NOT comparable to CulFiT Table 1 (GPT-4o-mini). Only the within-protocol
+        # delta (augmented - no_context) is the defensible alignment signal.
+        "comparability": ("within-protocol delta only; absolute rubric precision "
+                          f"depends on the judge ({model_name or 'mock'}) and is "
+                          "NOT comparable to CulFiT's reported numbers"),
+        "secondary_note": ("kp_f1 fields in the records/deltas are the point-"
+                           "coverage metric; the engine's coverage judge takes no "
+                           "context, so kp_f1 is context-BLIND and identical across "
+                           "arms by construction — descriptive only, not the delta."),
         "interpretation": (
-            "delta>0 across queries => augmentation carries task signal (tasks "
-            "aligned). delta~0 => augmentation is inert for this task (not "
-            "aligned / wrong augmentation source). delta<0 => augmentation is "
-            "consumed badly by the judge (e.g. scaffolding narration)."),
+            "delta>0 across queries => augmentation shifts Agent B's on-task "
+            "rubric judgement (tasks carry mutual signal). delta~0 => augmentation "
+            "is inert for the rubric (not aligned / wrong augmentation source — "
+            "the professor's 'find a better RAG' branch). delta<0 => augmentation "
+            "worsens the judgement (e.g. scaffolding narration)."),
     }
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
