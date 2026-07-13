@@ -354,12 +354,26 @@ def culfit_baseline_provider(evaluator: "TaskEvaluator"):
 
 def agentic_answer_provider(build_orchestrator: Callable[[dict], object],
                             evaluator: "TaskEvaluator",
-                            topology: str = "sequential"):
+                            topology: str = "sequential",
+                            style: str = "verbose"):
     """
     Agentic-system answer: run the orchestrator to produce final paths + the
     reconstructed context, then have the model WRITE a task answer conditioned on
     that augmentation. This is the professor's framing — the paths/critique are
     *augmentation*, and an orchestrator LLM solves the actual task on top of them.
+
+    style:
+      "verbose" — original prompt. Tells the model to "use the augmentation",
+                  which in practice makes it NARRATE the scaffolding into the
+                  answer ("according to the reasoning paths...", "as seen in the
+                  event where..."). Those meta-sentences become knowledge units
+                  that match nothing in the golden set, so precision collapses.
+      "terse"   — same augmentation, but the model is told to treat paths as
+                  BACKGROUND ONLY, answer the question directly, state only
+                  concrete cultural facts, and NEVER mention paths/events/agents.
+                  Isolates "is the augmentation unhelpful?" from "is it being
+                  consumed badly?" — the delta between the two styles quantifies
+                  how much of the precision loss is scaffolding-narration.
     """
     def provide(item: dict) -> str:
         orch = build_orchestrator(item)
@@ -379,8 +393,6 @@ def agentic_answer_provider(build_orchestrator: Callable[[dict], object],
         if isinstance(crit, dict):
             critique_fb = crit.get("feedback", "") or ""
 
-        # Orchestrator answer step: augment the QA prompt with the agentic
-        # evidence (paths + central nodes + critique), then solve the task.
         aug = []
         if paths:
             aug.append("Reconstructed cultural reasoning paths:\n"
@@ -391,18 +403,36 @@ def agentic_answer_provider(build_orchestrator: Callable[[dict], object],
             aug.append("Critique of the above evidence:\n" + critique_fb[:800])
         augmentation = "\n\n".join(aug) if aug else "(no augmentation available)"
 
-        prompt = (
-            "You are solving an open-ended cultural question. You are given "
-            "augmentation from a multi-agent system: reconstructed reasoning "
-            "paths, central concepts, and a critique of that evidence. Use the "
-            "augmentation where it is helpful and IGNORE any part the critique "
-            "flags as unhelpful or generic. Then write a specific, culturally "
-            "grounded answer.\n\n"
-            f"Cultural group: {gt.get('location','Unknown')}\n"
-            f"Topic: {gt.get('sub_topic','Unknown')}\n"
-            f"Question: {item['query']}\n\n"
-            f"--- Agentic augmentation ---\n{augmentation}\n--- End augmentation ---\n\n"
-            "Answer:")
+        if style == "terse":
+            prompt = (
+                "Answer the cultural question below directly and concisely. You "
+                "are given background evidence from a multi-agent system. Treat it "
+                "strictly as BACKGROUND: draw on it only where it states a "
+                "concrete, verifiable cultural fact, and ignore anything generic "
+                "or speculative. State only specific cultural facts (names, "
+                "practices, dates, customs). Do NOT describe your reasoning, do "
+                "NOT mention 'paths', 'events', 'evidence', or 'agents', and do "
+                "NOT hedge with 'may' or 'might'. Write it as a direct factual "
+                "answer a knowledgeable local would give.\n\n"
+                f"Cultural group: {gt.get('location','Unknown')}\n"
+                f"Topic: {gt.get('sub_topic','Unknown')}\n"
+                f"Question: {item['query']}\n\n"
+                f"--- Background (do not quote or reference) ---\n{augmentation}\n"
+                "--- End background ---\n\n"
+                "Direct factual answer:")
+        else:  # verbose (original)
+            prompt = (
+                "You are solving an open-ended cultural question. You are given "
+                "augmentation from a multi-agent system: reconstructed reasoning "
+                "paths, central concepts, and a critique of that evidence. Use the "
+                "augmentation where it is helpful and IGNORE any part the critique "
+                "flags as unhelpful or generic. Then write a specific, culturally "
+                "grounded answer.\n\n"
+                f"Cultural group: {gt.get('location','Unknown')}\n"
+                f"Topic: {gt.get('sub_topic','Unknown')}\n"
+                f"Question: {item['query']}\n\n"
+                f"--- Agentic augmentation ---\n{augmentation}\n--- End augmentation ---\n\n"
+                "Answer:")
         return evaluator.backend.chat(
             [{"role": "user", "content": prompt}], temperature=0.7) or ""
     return provide

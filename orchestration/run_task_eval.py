@@ -143,8 +143,16 @@ def build_providers(systems, backend, evaluator, max_loops):
         if s == "culfit_baseline":
             providers[s] = culfit_baseline_provider(evaluator)
         elif s.startswith("agentic_"):
-            topo = s.split("agentic_", 1)[1] or "sequential"
-            providers[s] = agentic_answer_provider(orch_factory, evaluator, topology=topo)
+            rest = s.split("agentic_", 1)[1] or "sequential"
+            style = "verbose"
+            for suf in ("_terse", "_verbose"):
+                if rest.endswith(suf):
+                    style = suf[1:]
+                    rest = rest[: -len(suf)]
+                    break
+            topo = rest or "sequential"
+            providers[s] = agentic_answer_provider(
+                orch_factory, evaluator, topology=topo, style=style)
         else:
             raise SystemExit(f"unknown system '{s}' "
                              "(expected culfit_baseline or agentic_<static|parallel|sequential>)")
