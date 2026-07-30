@@ -93,6 +93,51 @@ class APIBackend(LLMBackend):
         )
         return out or ""
 
+class GeminiBackend(LLMBackend):
+    """
+    Gemini via its OpenAI-compatible endpoint. Used as BOTH the augmentation
+    generator and the judge in the pivoted pipeline.
+
+    Lazily imports `openai` so mock/local modes never require it. Reads the key
+    from GEMINI_API_KEY (falls back to GOOGLE_API_KEY) so it never collides with
+    OPENAI_API_KEY used by APIBackend.
+    """
+
+    _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    def __init__(self, model_name: str = "gemini-2.0-flash",
+                 api_key: str | None = None, base_url: str | None = None,
+                 max_retries: int = 4):
+        self.model_name = model_name
+        import os
+        key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not key:
+            raise ValueError(
+                "GeminiBackend needs an API key. Set GEMINI_API_KEY in your .env "
+                "(or pass api_key=...). This is separate from OPENAI_API_KEY."
+            )
+        try:
+            from openai import OpenAI  # lazy: only needed in gemini mode
+        except Exception as e:  # pragma: no cover
+            raise ImportError(
+                "GeminiBackend requires the `openai` package (>=1.0). "
+                "pip install --no-index openai  (or with network: pip install openai). "
+                f"Original error: {e}"
+            ) from e
+        self._client = OpenAI(
+            api_key=key,
+            base_url=base_url or self._BASE_URL,
+            max_retries=max_retries,
+        )
+
+    def chat(self, messages: list[dict], temperature: float = 0.0) -> str:
+        resp = self._client.chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            temperature=temperature,
+        )
+        return (resp.choices[0].message.content or "") if resp.choices else ""
+
 
 class LocalBackend(LLMBackend):
     """In-process HF transformers model (cluster GPU). Lazily imports torch/transformers."""
@@ -117,13 +162,21 @@ class LocalBackend(LLMBackend):
 
 
 def make_backend(mode: str, **kwargs) -> LLMBackend:
-    """Factory. `mode` in {"mock","api","local"}."""
+    """Factory. `mode` in {"mock","api","gemini","local"}."""
     mode = (mode or "mock").lower()
     if mode == "mock":
         return MockBackend(responder=kwargs.get("responder"),
                            name=kwargs.get("name", "mock"))
     if mode == "api":
         return APIBackend(model_name=kwargs.get("model_name", "gpt-4o"))
+
+    if mode == "gemini":
+        return GeminiBackend(
+            model_name=kwargs.get("model_name", "gemini-2.0-flash"),
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+        )
+    
     if mode == "local":
         return LocalBackend(
             model_obj=kwargs["model_obj"],
