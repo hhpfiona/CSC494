@@ -10,3 +10,4 @@ venv/
 *.safetensors
 *.gguf
 run_ablation.txt
+narval_smoke.txt
