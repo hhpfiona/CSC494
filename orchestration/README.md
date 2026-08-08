@@ -69,6 +69,7 @@ each name resolves to exactly one intended file.
 ## Switching to the cluster
 
 - `--mode api`: set `OPENAI_API_KEY` (or point at a vLLM server on 0.0.0.0:8001).
+- need to Add GEMINI_API_KEY=... to your .env
 - **Local / GPU (Narval):** use the dedicated entrypoint, which loads the HF model
   ONCE and reuses it across all runs (unlike `run_ablation`, which builds a fresh
   backend per run and refuses to reload a heavy local model):
